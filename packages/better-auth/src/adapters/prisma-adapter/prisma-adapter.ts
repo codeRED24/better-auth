@@ -155,7 +155,7 @@ export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 						);
 					}
 					return await db[model]!.findFirst({
-						where: whereClause,
+						where: {...whereClause,deletedAt:null},
 						select: convertSelect(select, model),
 					});
 				},
@@ -168,7 +168,7 @@ export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 					}
 
 					return (await db[model]!.findMany({
-						where: whereClause,
+						where: {...whereClause,deletedAt:null},
 						take: limit || 100,
 						skip: offset || 0,
 						...(sortBy?.field
@@ -189,7 +189,7 @@ export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 						);
 					}
 					return await db[model]!.count({
-						where: whereClause,
+						where: {...whereClause,deletedAt:null},
 					});
 				},
 				async update({ model, where, update }) {
@@ -217,6 +217,7 @@ export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 					try {
 						await db[model]!.delete({
 							where: whereClause,
+							data: {deletedAt:new Date() },
 						});
 					} catch (e) {
 						// If the record doesn't exist, we don't want to throw an error
@@ -226,6 +227,7 @@ export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 					const whereClause = convertWhereClause(model, where);
 					const result = await db[model]!.deleteMany({
 						where: whereClause,
+						data: {deletedAt:new Date() },
 					});
 					return result ? (result.count as number) : 0;
 				},
