@@ -59,7 +59,6 @@ type PrismaClientInternal = {
 		[key: string]: any;
 	};
 };
-
 export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 	let lazyOptions: BetterAuthOptions | null = null;
 	const createCustomAdapter =
@@ -70,12 +69,10 @@ export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 			const convertSelect = (select?: string[], model?: string) => {
 				if (!select || !model) return undefined;
 				return select.reduce((prev, cur) => {
-					return {
-						...prev,
-						[getFieldName({ model, field: cur })]: true,
-					};
+					return { ...prev, [getFieldName({ model, field: cur })]: true };
 				}, {});
 			};
+
 			function operatorToPrismaOperator(operator: string) {
 				switch (operator) {
 					case "starts_with":
@@ -90,145 +87,154 @@ export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 						return operator;
 				}
 			}
+
 			const convertWhereClause = (model: string, where?: Where[]) => {
 				if (!where) return {};
 				if (where.length === 1) {
 					const w = where[0]!;
-					if (!w) {
-						return;
-					}
 					return {
 						[getFieldName({ model, field: w.field })]:
 							w.operator === "eq" || !w.operator
 								? w.value
-								: {
-										[operatorToPrismaOperator(w.operator)]: w.value,
-									},
+								: { [operatorToPrismaOperator(w.operator)]: w.value },
 					};
 				}
 				const and = where.filter((w) => w.connector === "AND" || !w.connector);
 				const or = where.filter((w) => w.connector === "OR");
-				const andClause = and.map((w) => {
-					return {
-						[getFieldName({ model, field: w.field })]:
-							w.operator === "eq" || !w.operator
-								? w.value
-								: {
-										[operatorToPrismaOperator(w.operator)]: w.value,
-									},
-					};
-				});
-				const orClause = or.map((w) => {
-					return {
-						[getFieldName({ model, field: w.field })]:
-							w.operator === "eq" || !w.operator
-								? w.value
-								: {
-										[operatorToPrismaOperator(w.operator)]: w.value,
-									},
-					};
-				});
-
-				return {
-					...(andClause.length ? { AND: andClause } : {}),
-					...(orClause.length ? { OR: orClause } : {}),
-				};
+				const andClause = and.map((w) => ({
+					[getFieldName({ model, field: w.field })]:
+						w.operator === "eq" || !w.operator
+							? w.value
+							: { [operatorToPrismaOperator(w.operator)]: w.value },
+				}));
+				const orClause = or.map((w) => ({
+					[getFieldName({ model, field: w.field })]:
+						w.operator === "eq" || !w.operator
+							? w.value
+							: { [operatorToPrismaOperator(w.operator)]: w.value },
+				}));
+				return { ...(andClause.length ? { AND: andClause } : {}), ...(orClause.length ? { OR: orClause } : {}) };
 			};
 
 			return {
 				async create({ model, data: values, select }) {
-					if (!db[model]) {
-						throw new BetterAuthError(
-							`Model ${model} does not exist in the database. If you haven't generated the Prisma client, you need to run 'npx prisma generate'`,
-						);
-					}
-					return await db[model]!.create({
-						data: values,
-						select: convertSelect(select, model),
-					});
+					if (!db[model]) throw new BetterAuthError(`Model ${model} does not exist.`);
+					return await db[model]!.create({ data: values, select: convertSelect(select, model) });
 				},
+
 				async findOne({ model, where, select }) {
 					const whereClause = convertWhereClause(model, where);
-					if (!db[model]) {
-						throw new BetterAuthError(
-							`Model ${model} does not exist in the database. If you haven't generated the Prisma client, you need to run 'npx prisma generate'`,
-						);
-					}
-					return await db[model]!.findFirst({
-						where: whereClause,
-						select: convertSelect(select, model),
-					});
-				},
-				async findMany({ model, where, limit, offset, sortBy }) {
-					const whereClause = convertWhereClause(model, where);
-					if (!db[model]) {
-						throw new BetterAuthError(
-							`Model ${model} does not exist in the database. If you haven't generated the Prisma client, you need to run 'npx prisma generate'`,
-						);
+					if (!db[model]) throw new BetterAuthError(`Model ${model} does not exist.`);
+
+					if (model === "Authors") {
+						// exclude soft-deleted users
+						return await db[model]!.findFirst({
+							where: { ...whereClause, deletedAt: null },
+							select: convertSelect(select, model),
+						});
 					}
 
-					return (await db[model]!.findMany({
+					if (model === "Sessions") {
+						// check if linked author is deleted
+						const session = await db[model]!.findFirst({
+							where: whereClause,
+							select: { ...convertSelect(select, model), author: { select: { deletedAt: true } } },
+						});
+						if (!session || session.author?.deletedAt) return null;
+						const { author, ...rest } = session;
+						return rest;
+					}
+
+					return await db[model]!.findFirst({ where: whereClause, select: convertSelect(select, model) });
+				},
+
+				async findMany({ model, where, limit, offset, sortBy }) {
+					const whereClause = convertWhereClause(model, where);
+					if (!db[model]) throw new BetterAuthError(`Model ${model} does not exist.`);
+
+					if (model === "Authors") {
+						return await db[model]!.findMany({
+							where: { ...whereClause, deletedAt: null },
+							take: limit || 100,
+							skip: offset || 0,
+							...(sortBy?.field
+								? { orderBy: { [getFieldName({ model, field: sortBy.field })]: sortBy.direction === "desc" ? "desc" : "asc" } }
+								: {}),
+						});
+					}
+
+					if (model === "Sessions") {
+						const sessions = await db[model]!.findMany({
+							where: whereClause,
+							include: { author: { select: { deletedAt: true } } },
+							take: limit || 100,
+							skip: offset || 0,
+							...(sortBy?.field
+								? { orderBy: { [getFieldName({ model, field: sortBy.field })]: sortBy.direction === "desc" ? "desc" : "asc" } }
+								: {}),
+						});
+						return sessions.filter((s) => !s.author?.deletedAt).map(({ author, ...rest }) => rest);
+					}
+
+					return await db[model]!.findMany({
 						where: whereClause,
 						take: limit || 100,
 						skip: offset || 0,
 						...(sortBy?.field
-							? {
-									orderBy: {
-										[getFieldName({ model, field: sortBy.field })]:
-											sortBy.direction === "desc" ? "desc" : "asc",
-									},
-								}
+							? { orderBy: { [getFieldName({ model, field: sortBy.field })]: sortBy.direction === "desc" ? "desc" : "asc" } }
 							: {}),
-					})) as any[];
+					});
 				},
+
 				async count({ model, where }) {
 					const whereClause = convertWhereClause(model, where);
-					if (!db[model]) {
-						throw new BetterAuthError(
-							`Model ${model} does not exist in the database. If you haven't generated the Prisma client, you need to run 'npx prisma generate'`,
-						);
+					if (!db[model]) throw new BetterAuthError(`Model ${model} does not exist.`);
+
+					if (model === "Authors") {
+						return await db[model]!.count({ where: { ...whereClause, deletedAt: null } });
 					}
-					return await db[model]!.count({
-						where: whereClause,
-					});
+
+					if (model === "Sessions") {
+						const sessions = await db[model]!.findMany({ where: whereClause, include: { author: { select: { deletedAt: true } } } });
+						return sessions.filter((s) => !s.author?.deletedAt).length;
+					}
+
+					return await db[model]!.count({ where: whereClause });
 				},
+
 				async update({ model, where, update }) {
-					if (!db[model]) {
-						throw new BetterAuthError(
-							`Model ${model} does not exist in the database. If you haven't generated the Prisma client, you need to run 'npx prisma generate'`,
-						);
-					}
 					const whereClause = convertWhereClause(model, where);
-					return await db[model]!.update({
-						where: whereClause,
-						data: update,
-					});
+					if (!db[model]) throw new BetterAuthError(`Model ${model} does not exist.`);
+					return await db[model]!.update({ where: whereClause, data: update });
 				},
+
 				async updateMany({ model, where, update }) {
 					const whereClause = convertWhereClause(model, where);
-					const result = await db[model]!.updateMany({
-						where: whereClause,
-						data: update,
-					});
+					const result = await db[model]!.updateMany({ where: whereClause, data: update });
 					return result ? (result.count as number) : 0;
 				},
+
 				async delete({ model, where }) {
 					const whereClause = convertWhereClause(model, where);
-					try {
-						await db[model]!.delete({
-							where: whereClause,
-						});
-					} catch (e) {
-						// If the record doesn't exist, we don't want to throw an error
+					if (model === "Authors") {
+						await db[model]!.update({ where: whereClause, data: { deletedAt: new Date() } });
+						return;
 					}
+					try {
+						await db[model]!.delete({ where: whereClause });
+					} catch {}
 				},
+
 				async deleteMany({ model, where }) {
 					const whereClause = convertWhereClause(model, where);
-					const result = await db[model]!.deleteMany({
-						where: whereClause,
-					});
+					if (model === "Authors") {
+						const result = await db[model]!.updateMany({ where: whereClause, data: { deletedAt: new Date() } });
+						return result ? (result.count as number) : 0;
+					}
+					const result = await db[model]!.deleteMany({ where: whereClause });
 					return result ? (result.count as number) : 0;
 				},
+
 				options: config,
 			};
 		};
@@ -244,10 +250,7 @@ export const prismaAdapter = (prisma: PrismaClient, config: PrismaConfig) => {
 				(config.transaction ?? false)
 					? (cb) =>
 							(prisma as PrismaClientInternal).$transaction((tx) => {
-								const adapter = createAdapterFactory({
-									config: adapterOptions!.config,
-									adapter: createCustomAdapter(tx),
-								})(lazyOptions!);
+								const adapter = createAdapterFactory({ config: adapterOptions!.config, adapter: createCustomAdapter(tx) })(lazyOptions!);
 								return cb(adapter);
 							})
 					: false,
